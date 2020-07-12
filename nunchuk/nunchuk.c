@@ -39,7 +39,6 @@ MODULE_DEVICE_TABLE(i2c, wiichuk_i2c_id);
 static struct i2c_driver wiichuk_i2c_driver = {
 	.driver = {
 		.name = "wiichuk_i2c",
-		.owner = THIS_MODULE,
 		.of_match_table = wiichuk_of_match
 	},
 	.probe = wiichuk_i2c_probe,
