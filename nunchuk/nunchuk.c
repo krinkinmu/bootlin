@@ -96,9 +96,12 @@ static int wiichuk_i2c_read_registers(
 	int err;
 
 	// Bootlin training material claim that Nintendo Wiichuk only updates
-	// internal state after it's been read. Therefore to get the latest
-	// state we have to read it twice: first time to cause an update and
-	// the second time to read the updated state.
+	// internal state after it's been read, I tested it on the Wiichuck
+	// device I have and it's indeed the case.
+	//
+	// Therefore to get the latest state we have to read it twice: first
+	// time to cause an update and the second time to read the updated
+	// state.
 
 	err = wiichuk_i2c_read_state(client, &state);
 	if (err)
