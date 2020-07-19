@@ -28,8 +28,6 @@ static int wiichuk_i2c_handshake(const struct i2c_client *client)
 	if (ret < 0)
 		return ret;
 
-	mdelay(1);
-
 	ret = i2c_master_send(client, msg2, sizeof(msg2));
 	if (ret < 0)
 		return ret;
@@ -43,12 +41,10 @@ static int wiichuk_i2c_read_state(
 	const char msg[] = {0x00};
 	int ret;
 
-	usleep_range(10000, 20000);
 	ret = i2c_master_send(client, msg, sizeof(msg));
 	if (ret < 0)
 		return ret;
 
-	usleep_range(10000, 20000);
 	ret = i2c_master_recv(client, state->data, sizeof(state->data));
 	if (ret < 0)
 		return ret;
@@ -106,6 +102,8 @@ static int wiichuk_i2c_read_registers(
 	err = wiichuk_i2c_read_state(client, &state);
 	if (err)
 		return err;
+
+	usleep_range(10000, 20000);
 
 	err = wiichuk_i2c_read_state(client, &state);
 	if (err)
