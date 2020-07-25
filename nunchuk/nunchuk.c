@@ -4,6 +4,11 @@
 #include <linux/kernel.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
+#include <linux/input-polldev.h>
+
+struct wiichuk_dev {
+	struct i2c_client *i2c_client;
+};
 
 struct wiichuk_state {
 	char data[6];
@@ -72,38 +77,11 @@ static void wiichuk_parse_registers(
 	regs->c_pressed = ((BIT(1) & state->data[5]) == 0) ? true : false;
 }
 
-static void wiichuk_registers_dump(const struct wiichuk_registers *regs)
-{
-	pr_alert("Nintendo Wiichuk Z button is %s\n",
-		 regs->z_pressed ? "pressed" : "not pressed");
-	pr_alert("Nintendo Wiichuk C button is %s\n",
-		 regs->c_pressed ? "pressed" : "not pressed");
-
-	pr_alert("Nintendo Wiichuk position (x, y): (%u, %u)\n",
-		 regs->x, regs->y);
-	pr_alert("Nintendo Wiichuk acceleration (x, y, z): (%u, %u, %u)\n",
-		 regs->x_acc, regs->y_acc, regs->z_acc);
-}
-
 static int wiichuk_i2c_read_registers(
 	const struct i2c_client *client, struct wiichuk_registers *regs)
 {
 	struct wiichuk_state state;
 	int err;
-
-	// Bootlin training material claim that Nintendo Wiichuk only updates
-	// internal state after it's been read, I tested it on the Wiichuck
-	// device I have and it's indeed the case.
-	//
-	// Therefore to get the latest state we have to read it twice: first
-	// time to cause an update and the second time to read the updated
-	// state.
-
-	err = wiichuk_i2c_read_state(client, &state);
-	if (err)
-		return err;
-
-	usleep_range(10000, 20000);
 
 	err = wiichuk_i2c_read_state(client, &state);
 	if (err)
@@ -114,26 +92,74 @@ static int wiichuk_i2c_read_registers(
 	return 0;
 }
 
+static void wiichuk_poll(struct input_polled_dev *polled)
+{
+	struct wiichuk_dev *wiichuk = (struct wiichuk_dev *)polled->private;
+	struct wiichuk_registers regs;
+	int err;
+
+	err = wiichuk_i2c_read_registers(wiichuk->i2c_client, &regs);
+	if (err) {
+		pr_err("Failed to read the Nintendo Wiichuk state: %d\n", err);
+		return;
+	}
+
+	input_event(polled->input, EV_KEY, BTN_Z, regs.z_pressed);
+	input_event(polled->input, EV_KEY, BTN_C, regs.c_pressed);
+	input_sync(polled->input);
+}
+
+static void wiichuk_input_dev_init(
+	struct input_polled_dev *polled_input, struct wiichuk_dev *wiichuk)
+{
+	struct input_dev *input = polled_input->input;
+
+	polled_input->poll = &wiichuk_poll;
+	polled_input->private = wiichuk;
+	polled_input->poll_interval = 5;
+
+	input->name = "Nintendo Wiichuk";
+	input->id.bustype = BUS_I2C;
+
+	set_bit(EV_KEY, input->evbit);
+	set_bit(BTN_C, input->keybit);
+	set_bit(BTN_Z, input->keybit);
+}
+
 static int wiichuk_i2c_probe(
 	struct i2c_client *client, const struct i2c_device_id *id)
 {
-	struct wiichuk_registers regs;
-	int err = wiichuk_i2c_handshake(client);
+	struct wiichuk_dev *wiichuk;
+	struct input_polled_dev *polled_input;
+	int err;
 
 	(void) id;
 
+	wiichuk = devm_kzalloc(&client->dev, sizeof(*wiichuk), GFP_KERNEL);
+	if (!wiichuk) {
+		pr_err("Failed to allocate device structure\n");
+		return -ENOMEM;
+	}
+	wiichuk->i2c_client = client;
+
+	err = wiichuk_i2c_handshake(wiichuk->i2c_client);
 	if (err) {
 		pr_err("Nintendo Wiichuk handshake failed: %d\n", err);
 		return err;
 	}
 
-	err = wiichuk_i2c_read_registers(client, &regs);
-	if (err) {
-		pr_err("Failed to read Nintendo Wiichuck registers: %d\n", err);
-		return err;
+	polled_input = devm_input_allocate_polled_device(&client->dev);
+	if (!polled_input) {
+		pr_err("Failed to allocated input_polled_dev structure\n");
+		return -ENOMEM;
 	}
 
-	wiichuk_registers_dump(&regs);
+	wiichuk_input_dev_init(polled_input, wiichuk);
+	err = input_register_polled_device(polled_input);
+	if (err) {
+		pr_err("Failed to register input device: %d\n", err);
+		return err;
+	}
 
 	return 0;
 }
