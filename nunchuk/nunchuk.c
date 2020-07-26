@@ -104,8 +104,10 @@ static void wiichuk_poll(struct input_polled_dev *polled)
 		return;
 	}
 
-	input_event(polled->input, EV_KEY, BTN_Z, regs.z_pressed);
-	input_event(polled->input, EV_KEY, BTN_C, regs.c_pressed);
+	input_report_key(polled->input, BTN_Z, regs.z_pressed);
+	input_report_key(polled->input, BTN_C, regs.c_pressed);
+	input_report_abs(polled->input, ABS_X, regs.x);
+	input_report_abs(polled->input, ABS_Y, regs.y);
 	input_sync(polled->input);
 }
 
@@ -124,6 +126,11 @@ static void wiichuk_input_dev_init(
 	set_bit(EV_KEY, input->evbit);
 	set_bit(BTN_C, input->keybit);
 	set_bit(BTN_Z, input->keybit);
+
+	set_bit(ABS_X, input->absbit);
+	set_bit(ABS_Y, input->absbit);
+	input_set_abs_params(input, ABS_X, 0, 255, 4, 8);
+	input_set_abs_params(input, ABS_Y, 0, 255, 4, 8);
 }
 
 static int wiichuk_i2c_probe(
