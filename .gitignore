@@ -148,3 +148,10 @@ x509.genkey
 
 # Clang's compilation database file
 /compile_commands.json
+
+# Dependency files
+*.d
+
+# Custom binaries
+list
+setvidpid
