@@ -2,50 +2,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include "ftd2xx.h"
+#include "ftdi.h"
 #include "usbid.h"
-
-struct serial {
-	char serial[16];
-};
-
-static int devices(int *devices)
-{
-	FT_STATUS status;
-	DWORD n;
-
-	status = FT_ListDevices(&n, NULL, FT_LIST_NUMBER_ONLY);
-	if (!FT_SUCCESS(status))
-		return -1;
-
-	*devices = n;
-	return 0;
-}
-
-static int register_device_id(unsigned vid, unsigned pid)
-{
-	FT_STATUS status;
-
-	status = FT_SetVIDPID(vid, pid);
-	if (!FT_SUCCESS(status))
-		return -1;
-
-	return 0;
-}
-
-static int device_serial(int index, struct serial *serial)
-{
-	FT_STATUS status;
-
-	status = FT_ListDevices(
-		(void *)((unsigned long)index),
-		serial->serial,
-		FT_LIST_BY_INDEX | FT_OPEN_BY_SERIAL_NUMBER);
-	if (!FT_SUCCESS(status))
-		return -1;
-
-	return 0;
-}
 
 static void usage(const char *name)
 {
@@ -78,7 +36,7 @@ int main(int argc, char **argv)
 					optarg);
 				return 1;
 			}
-			if (register_device_id(vid, pid) != 0) {
+			if (ftdi_register_device_id(vid, pid) != 0) {
 				fprintf(stderr,
 					"failed to register device id %s\n",
 					optarg);
@@ -91,7 +49,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (devices(&device_count) != 0) {
+	if (ftdi_devices(&device_count) != 0) {
 		fprintf(stderr, "failed to enumerate FTDI devices\n");
 		return 1;
 	}
@@ -100,7 +58,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < device_count; ++i) {
 		struct serial serial;
 
-		if (device_serial(i, &serial) != 0)
+		if (ftdi_serial(i, &serial) != 0)
 			fprintf(stdout, "%d: failed to get serial number\n", i);
 		else
 			fprintf(stdout, "%d: %s\n", i, serial.serial);
