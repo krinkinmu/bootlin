@@ -1,6 +1,6 @@
 CC ?= cc
-CFLAGS ?= -Wall -Werror -MD
-LDFLAGS ?= -lftd2xx -lpthread -lrt
+CFLAGS ?= -Wall -Werror -fsanitize=undefined -MD
+LDFLAGS ?= -lftd2xx -lpthread -lrt -fsanitize=undefined
 
 sources = usbid.c list.c setvidpid.c ftdi.c mpsse.c
 
@@ -8,6 +8,9 @@ default: all
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+i2c_read: i2c_read.o ftdi.o mpsse.o
+	$(CC) $^ $(LDFLAGS) -o $@
 
 list: list.o usbid.o ftdi.o
 	$(CC) $^ $(LDFLAGS) -o $@
@@ -19,7 +22,7 @@ setvidpid: setvidpid.o usbid.o ftdi.o
 
 .PHONY: clean all default
 
-all: list setvidpid
+all: list setvidpid i2c_read
 
 clean:
-	rm -rf list setvidpid *.o *.d
+	rm -rf list setvidpid i2c_read *.o *.d
