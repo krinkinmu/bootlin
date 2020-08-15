@@ -35,11 +35,11 @@ int ftdi_set_device_id(FT_HANDLE handle, unsigned vid, unsigned pid);
 int ftdi_disable_special_chars(FT_HANDLE handle);
 int ftdi_set_bit_mode(FT_HANDLE handle, unsigned mode);
 
-int ftdi_read(FT_HANDLE handle, void *buf, int size);
-int ftdi_read_exactly(FT_HANDLE handle, void *buf, int size);
+int ftdi_read(FT_HANDLE handle, void *buf, unsigned size);
+int ftdi_read_exactly(FT_HANDLE handle, void *buf, unsigned size);
 int ftdi_drain(FT_HANDLE handle);
 
-int ftdi_write(FT_HANDLE handle, const void *buf, int size);
-int ftdi_write_exactly(FT_HANDLE handle, const void *buf, int size);
+int ftdi_write(FT_HANDLE handle, const void *buf, unsigned size);
+int ftdi_write_exactly(FT_HANDLE handle, const void *buf, unsigned size);
 
 #endif  // __FTDI_H__
