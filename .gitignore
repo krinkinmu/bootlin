@@ -155,3 +155,4 @@ x509.genkey
 # Custom binaries
 list
 setvidpid
+i2c_read
