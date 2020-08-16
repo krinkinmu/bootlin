@@ -289,7 +289,7 @@ void mpsse_set_output(
 	buf[1] = pinvals & 0xff;
 	buf[2] = pinmask & 0xff;
 	buf[3] = 0x82;
-	buf[4] = pinvals >> 8 & 0xff;
+	buf[4] = (pinvals >> 8) & 0xff;
 	buf[5] = (pinmask >> 8) & 0xff;
 	if (out)
 		*out = cmd;
