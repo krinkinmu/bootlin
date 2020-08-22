@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -Wall -Werror -fsanitize=undefined -MD
 LDFLAGS ?= -lftd2xx -lpthread -lrt -fsanitize=undefined
 
-sources = usbid.c list.c setvidpid.c ftdi.c mpsse.c
+sources = usbid.c list.c setvidpid.c ftdi.c mpsse.c reset.c
 
 default: all
 
@@ -18,11 +18,14 @@ list: list.o usbid.o ftdi.o
 setvidpid: setvidpid.o usbid.o ftdi.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
+reset: reset.o ftdi.o
+	$(CC) $^ $(LDFLAGS) -o $@
+
 -include $(sources:.c=.d)
 
 .PHONY: clean all default
 
-all: list setvidpid i2c_read
+all: list setvidpid i2c_read reset
 
 clean:
-	rm -rf list setvidpid i2c_read *.o *.d
+	rm -rf list setvidpid i2c_read reset *.o *.d

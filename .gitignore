@@ -156,3 +156,4 @@ x509.genkey
 list
 setvidpid
 i2c_read
+reset
