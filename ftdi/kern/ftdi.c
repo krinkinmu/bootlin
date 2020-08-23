@@ -10,12 +10,65 @@
 // Timeout in milliseconds for USB IO operations
 #define TIMEOUT 5000
 
+#define FTDI_BIT_MODE_RESET 0x0000u
+#define FTDI_BIT_MODE_MPSSE 0x0200u
+
 
 static const struct usb_device_id ftdi_id_table[] = {
 	{ USB_DEVICE(VENDOR_ID, PRODUCT_ID) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ftdi_id_table);
+
+static int ftdi_usb_set_bit_mode(struct usb_device *dev, u16 mode)
+{
+	int ret;
+
+	ret = usb_control_msg(
+		dev, usb_sndctrlpipe(dev, 0),
+		/* bRequest = */0x0b,
+		/* bRequestType = */0x40,
+		/* wValue = */mode,
+		/* wIndex =  */0x0000,
+		/* data = */NULL,
+		/* size = */0,
+		TIMEOUT);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+static int ftdi_usb_disable_special_characters(struct usb_device *dev)
+{
+	int ret;
+
+	ret = usb_control_msg(
+		dev, usb_sndctrlpipe(dev, 0),
+		/* bRequest = */0x06,
+		/* bRequestType = */0x40,
+		/* wValue = */0x0000,
+		/* wIndex =  */0x0000,
+		/* data = */NULL,
+		/* size = */0,
+		TIMEOUT);
+	if (ret < 0)
+		return ret;
+
+	ret = usb_control_msg(
+		dev, usb_sndctrlpipe(dev, 0),
+		/* bRequest = */0x07,
+		/* bRequestType = */0x40,
+		/* wValue = */0x0000,
+		/* wIndex =  */0x0000,
+		/* data = */NULL,
+		/* size = */0,
+		TIMEOUT);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
 
 // The FTDI interface is not described in any publicly available document.
 // Instead of the documentation I looked at what the FTDI userspace driver does
@@ -33,7 +86,6 @@ MODULE_DEVICE_TABLE(usb, ftdi_id_table);
 static int ftdi_usb_reset(struct usb_device *dev)
 {
 	int ret;
-
 
 	ret = usb_control_msg(
 		dev, usb_sndctrlpipe(dev, 0),
@@ -71,7 +123,19 @@ static int ftdi_usb_reset(struct usb_device *dev)
 	if (ret < 0)
 		return ret;
 
-	return ret;
+	ret = ftdi_usb_disable_special_characters(dev);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_usb_set_bit_mode(dev, FTDI_BIT_MODE_RESET);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_usb_set_bit_mode(dev, FTDI_BIT_MODE_MPSSE);
+	if (ret < 0)
+		return ret;
+
+	return 0;
 }
 
 static int ftdi_usb_probe(struct usb_interface *interface,
@@ -80,13 +144,13 @@ static int ftdi_usb_probe(struct usb_interface *interface,
 	struct usb_device *dev = interface_to_usbdev(interface);
 	int ret;
 
+	(void) id;
 	ret = ftdi_usb_reset(dev);
-	if (ret != 0) {
-		pr_alert("Failed to reset FTDI-based device: %d\n", ret);
+	if (ret < 0) {
+		pr_err("Failed to reset FTDI-based device: %d\n", ret);
 		return ret;
 	}
 
-	(void) id;
 	pr_alert("Our FTDI-based device has been connected\n");
 	return 0;
 }
