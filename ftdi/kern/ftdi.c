@@ -1,24 +1,58 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>
+#include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
 
-#define VENDOR_ID  0x0005
-#define PRODUCT_ID 0x0001
-
 // Timeout in milliseconds for USB IO operations
-#define TIMEOUT 5000
+const int FTDI_IO_TIMEOUT = 5000;
+const size_t FTDI_IO_BUFFER_SIZE = 65536;
+const u16 FTDI_BIT_MODE_RESET = 0x0000;
+const u16 FTDI_BIT_MODE_MPSSE = 0x0200;
 
-#define FTDI_BIT_MODE_RESET 0x0000u
-#define FTDI_BIT_MODE_MPSSE 0x0200u
 
+struct ftdi_usb {
+	struct usb_device *udev;
+	struct usb_interface *interface;
+	void *buffer;
+	size_t buffer_size;
+	struct i2c_adapter adapter;
+};
+
+static int ftdi_usb_i2c_xfer(struct i2c_adapter *adapter,
+			     struct i2c_msg *msg, int num)
+{
+	(void) adapter;
+	(void) msg;
+	(void) num;
+	return -ENOSYS;
+}
+
+static u32 ftdi_usb_i2c_func(struct i2c_adapter *adapter)
+{
+	(void) adapter;
+	return I2C_FUNC_I2C;
+}
+
+static const struct i2c_algorithm ftdi_usb_i2c_algo = {
+	.master_xfer = ftdi_usb_i2c_xfer,
+	.functionality = ftdi_usb_i2c_func,
+};
 
 static const struct usb_device_id ftdi_id_table[] = {
-	{ USB_DEVICE(VENDOR_ID, PRODUCT_ID) },
+	{ USB_DEVICE(0x0005, 0x0001) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, ftdi_id_table);
+
+static void ftdi_usb_delete(struct ftdi_usb *ftdi)
+{
+	usb_put_intf(ftdi->interface);
+	usb_put_dev(ftdi->udev);
+	kfree(ftdi->buffer);
+	kfree(ftdi);
+}
 
 static int ftdi_usb_set_bit_mode(struct usb_device *dev, u16 mode)
 {
@@ -32,7 +66,7 @@ static int ftdi_usb_set_bit_mode(struct usb_device *dev, u16 mode)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -51,7 +85,7 @@ static int ftdi_usb_disable_special_characters(struct usb_device *dev)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -63,7 +97,7 @@ static int ftdi_usb_disable_special_characters(struct usb_device *dev)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -95,7 +129,7 @@ static int ftdi_usb_reset(struct usb_device *dev)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -107,7 +141,7 @@ static int ftdi_usb_reset(struct usb_device *dev)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -119,7 +153,7 @@ static int ftdi_usb_reset(struct usb_device *dev)
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		TIMEOUT);
+		FTDI_IO_TIMEOUT);
 	if (ret < 0)
 		return ret;
 
@@ -142,23 +176,55 @@ static int ftdi_usb_probe(struct usb_interface *interface,
 			  const struct usb_device_id *id)
 {
 	struct usb_device *dev = interface_to_usbdev(interface);
+	struct ftdi_usb *ftdi;
 	int ret;
 
 	(void) id;
 	ret = ftdi_usb_reset(dev);
 	if (ret < 0) {
-		pr_err("Failed to reset FTDI-based device: %d\n", ret);
+		dev_err(&interface->dev,
+			"Failed to reset FTDI-based device: %d\n", ret);
 		return ret;
 	}
 
-	pr_alert("Our FTDI-based device has been connected\n");
+	ftdi = kzalloc(sizeof(*ftdi), GFP_KERNEL);
+	if (!ftdi)
+		return -ENOMEM;
+
+	ftdi->udev = usb_get_dev(dev);
+	ftdi->interface = usb_get_intf(interface);
+	ftdi->buffer = kzalloc(FTDI_IO_BUFFER_SIZE, GFP_KERNEL);
+	ftdi->buffer_size = FTDI_IO_BUFFER_SIZE;
+	if (!ftdi->buffer) {
+		dev_err(&interface->dev,
+			"Failed to initialize the FTDI-based device: %d\n",
+			-ENOMEM);
+		ftdi_usb_delete(ftdi);
+		return -ENOMEM;
+	}
+
+	ftdi->adapter.owner = THIS_MODULE;
+	ftdi->adapter.algo = &ftdi_usb_i2c_algo;
+	ftdi->adapter.algo_data = ftdi;
+	ftdi->adapter.dev.parent = &interface->dev;
+	snprintf(ftdi->adapter.name, sizeof(ftdi->adapter.name),
+		 "FTDI USB-to-I2C at bus %03d device %03d",
+		 dev->bus->busnum, dev->devnum);
+	i2c_add_adapter(&ftdi->adapter);
+
+	usb_set_intfdata(interface, ftdi);
+	dev_info(&interface->dev, "Initialized FTDI-based device\n");
 	return 0;
 }
 
 static void ftdi_usb_disconnect(struct usb_interface *interface)
 {
-	(void) interface;
-	pr_alert("Our FTDI-based device has been disconnected\n");
+	struct ftdi_usb *ftdi = usb_get_intfdata(interface);
+
+	i2c_del_adapter(&ftdi->adapter);
+	usb_set_intfdata(interface, NULL);
+	ftdi_usb_delete(ftdi);
+	dev_info(&interface->dev, "FTDI-based device has been disconnected\n");
 }
 
 static struct usb_driver ftdi_usb_driver = {
