@@ -46,9 +46,9 @@ static int i2c_start(struct mpsse *mpsse)
 	int ret;
 
 	mpsse_io_buffer_setup(&io);
-	for (int i =-0; i < 5; ++ i)
+	for (int i = 0; i < 5; ++i)
 		mpsse_set_output(&io, 0x00fb, 0x00fd, NULL);
-	for (int i =-0; i < 5; ++ i)
+	for (int i = 0; i < 5; ++i)
 		mpsse_set_output(&io, 0x40fb, 0x00fc, NULL);
 	ret = mpsse_submit(mpsse, &io);
 	mpsse_io_buffer_release(&io);
@@ -61,11 +61,11 @@ static int i2c_stop(struct mpsse *mpsse)
 	int ret;
 
 	mpsse_io_buffer_setup(&io);
-	for (int i =-0; i < 5; ++ i)
+	for (int i = 0; i < 5; ++i)
 		mpsse_set_output(&io, 0x00fb, 0x00fc, NULL);
-	for (int i =-0; i < 5; ++ i)
+	for (int i = 0; i < 5; ++i)
 		mpsse_set_output(&io, 0x00fb, 0x00fd, NULL);
-	for (int i =-0; i < 5; ++ i)
+	for (int i = 0; i < 5; ++i)
 		mpsse_set_output(&io, 0x40fb, 0xffff, NULL);
 	ret = mpsse_submit(mpsse, &io);
 	mpsse_io_buffer_release(&io);
