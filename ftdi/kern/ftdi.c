@@ -5,8 +5,10 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 
-// Timeout in milliseconds for USB IO operations
+#include "mpsse.h"
+
 const int FTDI_IO_TIMEOUT = 5000;
+const unsigned FTDI_I2C_FREQ = 100000;
 const size_t FTDI_IO_BUFFER_SIZE = 65536;
 const u16 FTDI_BIT_MODE_RESET = 0x0000;
 const u16 FTDI_BIT_MODE_MPSSE = 0x0200;
@@ -15,9 +17,13 @@ const u16 FTDI_BIT_MODE_MPSSE = 0x0200;
 struct ftdi_usb {
 	struct usb_device *udev;
 	struct usb_interface *interface;
-	void *buffer;
+	u8 *buffer;
 	size_t buffer_size;
 	struct i2c_adapter adapter;
+	// Timeout in milliseconds for USB IO operations
+	int io_timeout;
+	// I2C bus frequency
+	unsigned freq;
 };
 
 static int ftdi_usb_i2c_xfer(struct i2c_adapter *adapter,
@@ -54,50 +60,179 @@ static void ftdi_usb_delete(struct ftdi_usb *ftdi)
 	kfree(ftdi);
 }
 
-static int ftdi_usb_set_bit_mode(struct usb_device *dev, u16 mode)
+static int ftdi_mpsse_submit(struct ftdi_usb *ftdi, struct ftdi_mpsse_cmd *cmd)
 {
+	return usb_bulk_msg(
+		ftdi->udev, usb_sndbulkpipe(ftdi->udev, 2),
+		/* data = */cmd->buffer,
+		/* len = */cmd->offset,
+		/* actual_length = */NULL,
+		ftdi->io_timeout);
+}
+
+static int ftdi_mpsse_receive(
+	struct ftdi_usb *ftdi, u8 *data, size_t size, size_t *read)
+{
+	int actual_length;
+	int ret;
+
+	ret = usb_bulk_msg(
+		ftdi->udev, usb_rcvbulkpipe(ftdi->udev, 1),
+		/* data = */data,
+		/* len = */size,
+		/* actual_length = */&actual_length,
+		ftdi->io_timeout);
+	if (ret < 0)
+		return ret;
+
+	*read = actual_length;
+	return 0;
+}
+
+static int ftdi_mpsse_verify(struct ftdi_usb *ftdi)
+{
+	struct ftdi_mpsse_cmd cmd;
+	size_t received;
+	int ret;
+
+	ftdi_mpsse_cmd_setup(&cmd, ftdi->buffer, ftdi->buffer_size);
+	ret = ftdi_mpsse_command(&cmd, 0xaa);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_submit(ftdi, &cmd);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_receive(
+		ftdi, ftdi->buffer, ftdi->buffer_size, &received);
+	if (ret < 0)
+		return ret;
+
+	if (received != 4 || ftdi->buffer[2] != 0xfa || ftdi->buffer[3] != 0xaa)
+		return -EIO;
+
+	ftdi_mpsse_cmd_reset(&cmd);
+	ret = ftdi_mpsse_command(&cmd, 0xab);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_submit(ftdi, &cmd);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_receive(
+		ftdi, ftdi->buffer, ftdi->buffer_size, &received);
+	if (ret < 0)
+		return ret;
+
+	if (received != 4 || ftdi->buffer[2] != 0xfa || ftdi->buffer[3] != 0xab)
+		return -EIO;
+
+	return 0;
+}
+
+static int ftdi_mpsse_i2c_setup(struct ftdi_usb *ftdi)
+{
+	struct ftdi_mpsse_cmd cmd;
+	int ret;
+
+	ftdi_mpsse_cmd_setup(&cmd, ftdi->buffer, ftdi->buffer_size);
+	ret = ftdi_mpsse_disable_adaptive_clocking(&cmd);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_disable_loopback(&cmd);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_set_drive0_pins(&cmd, 0x7);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_set_freq(&cmd, ftdi->freq);
+	if (ret < 0)
+		return ret;
+
+	return ftdi_mpsse_submit(ftdi, &cmd);
+}
+
+static int ftdi_i2c_idle(struct ftdi_usb *ftdi)
+{
+	const unsigned pinmask = 0x40fb;
+	const unsigned pinvals = 0xffff;
+
+	struct ftdi_mpsse_cmd cmd;
+	int ret;
+
+	ftdi_mpsse_cmd_setup(&cmd, ftdi->buffer, ftdi->buffer_size);
+	ret = ftdi_mpsse_set_output(&cmd, pinmask, pinvals);
+	if (ret < 0)
+		return ret;
+
+	return ftdi_mpsse_submit(ftdi, &cmd);
+}
+
+static int ftdi_set_bit_mode(struct ftdi_usb *ftdi, u16 mode)
+{
+	int actual_length;
 	int ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x0b,
 		/* bRequestType = */0x40,
 		/* wValue = */mode,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
+
+	// After changing the mode we need to read 2 bytes of status, but since
+	// I don't know the format I read them check that it's just 2 bytes and
+	// ignore the actual values.
+	ret = usb_bulk_msg(
+		ftdi->udev, usb_rcvbulkpipe(ftdi->udev, 1),
+		/* data = */ftdi->buffer,
+		/* len = */ftdi->buffer_size,
+		/* actual_length = */&actual_length,
+		ftdi->io_timeout);
+	if (ret < 0)
+		return ret;
+
+	if (actual_length != 2)
+		return -EIO;
 
 	return 0;
 }
 
-static int ftdi_usb_disable_special_characters(struct usb_device *dev)
+static int ftdi_disable_special_characters(struct ftdi_usb *ftdi)
 {
 	int ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x06,
 		/* bRequestType = */0x40,
 		/* wValue = */0x0000,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x07,
 		/* bRequestType = */0x40,
 		/* wValue = */0x0000,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
 
@@ -117,59 +252,67 @@ static int ftdi_usb_disable_special_characters(struct usb_device *dev)
 // The meaning of wValue is not clear to me still. drivers/usb/serial/ftdi_sio.c
 // uses only value 0 (FTDI_SIO_RESET_SIO), but the userspace driver when doing
 // reset uses 0, 1 and 2.
-static int ftdi_usb_reset(struct usb_device *dev)
+static int ftdi_reset(struct ftdi_usb *ftdi)
 {
 	int ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x00,
 		/* bRequestType = */0x40,
 		/* wValue = */0x0000,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x00,
 		/* bRequestType = */0x40,
 		/* wValue = */0x0001,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
 
 	ret = usb_control_msg(
-		dev, usb_sndctrlpipe(dev, 0),
+		ftdi->udev, usb_sndctrlpipe(ftdi->udev, 0),
 		/* bRequest = */0x00,
 		/* bRequestType = */0x40,
 		/* wValue = */0x0002,
 		/* wIndex =  */0x0000,
 		/* data = */NULL,
 		/* size = */0,
-		FTDI_IO_TIMEOUT);
+		ftdi->io_timeout);
 	if (ret < 0)
 		return ret;
 
-	ret = ftdi_usb_disable_special_characters(dev);
+	ret = ftdi_disable_special_characters(ftdi);
 	if (ret < 0)
 		return ret;
 
-	ret = ftdi_usb_set_bit_mode(dev, FTDI_BIT_MODE_RESET);
+	ret = ftdi_set_bit_mode(ftdi, FTDI_BIT_MODE_RESET);
 	if (ret < 0)
 		return ret;
 
-	ret = ftdi_usb_set_bit_mode(dev, FTDI_BIT_MODE_MPSSE);
+	ret = ftdi_set_bit_mode(ftdi, FTDI_BIT_MODE_MPSSE);
 	if (ret < 0)
 		return ret;
 
-	return 0;
+	ret = ftdi_mpsse_i2c_setup(ftdi);
+	if (ret < 0)
+		return ret;
+
+	ret = ftdi_mpsse_verify(ftdi);
+	if (ret < 0)
+		return ret;
+
+	return ftdi_i2c_idle(ftdi);
 }
 
 static int ftdi_usb_probe(struct usb_interface *interface,
@@ -180,12 +323,6 @@ static int ftdi_usb_probe(struct usb_interface *interface,
 	int ret;
 
 	(void) id;
-	ret = ftdi_usb_reset(dev);
-	if (ret < 0) {
-		dev_err(&interface->dev,
-			"Failed to reset FTDI-based device: %d\n", ret);
-		return ret;
-	}
 
 	ftdi = kzalloc(sizeof(*ftdi), GFP_KERNEL);
 	if (!ftdi)
@@ -193,6 +330,8 @@ static int ftdi_usb_probe(struct usb_interface *interface,
 
 	ftdi->udev = usb_get_dev(dev);
 	ftdi->interface = usb_get_intf(interface);
+	ftdi->io_timeout = FTDI_IO_TIMEOUT;
+	ftdi->freq = FTDI_I2C_FREQ;
 	ftdi->buffer = kzalloc(FTDI_IO_BUFFER_SIZE, GFP_KERNEL);
 	ftdi->buffer_size = FTDI_IO_BUFFER_SIZE;
 	if (!ftdi->buffer) {
@@ -201,6 +340,14 @@ static int ftdi_usb_probe(struct usb_interface *interface,
 			-ENOMEM);
 		ftdi_usb_delete(ftdi);
 		return -ENOMEM;
+	}
+
+	ret = ftdi_reset(ftdi);
+	if (ret < 0) {
+		dev_err(&interface->dev,
+			"Failed to reset FTDI-based device: %d\n", ret);
+		ftdi_usb_delete(ftdi);
+		return ret;
 	}
 
 	ftdi->adapter.owner = THIS_MODULE;
