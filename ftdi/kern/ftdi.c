@@ -73,6 +73,7 @@ static int ftdi_mpsse_submit(
 				       &actual_length);
 		if (ret < 0)
 			return ret;
+
 		written += actual_length;
 	}
 
@@ -85,21 +86,18 @@ static int ftdi_mpsse_receive(struct ftdi_usb *ftdi, u8 *data, size_t size)
 
 	while (read < size) {
 		size_t actual_length;
-		size_t to_read;
 		int ret;
-
-		to_read = ftdi->buffer_size;
-		if (to_read > size - read + 2)
-			to_read = size - read + 2;
 
 		ret = ftdi_mpsse_read(ftdi,
 				      ftdi->buffer,
-				      to_read,
+				      min(ftdi->buffer_size, size - read + 2),
 				      &actual_length);
 		if (ret < 0)
 			return ret;
+
 		if (actual_length < 2)
 			return -EIO;
+
 		memcpy(data + read, ftdi->buffer + 2, actual_length - 2);
 		read += actual_length - 2;
 	}
@@ -134,6 +132,7 @@ static int ftdi_i2c_start(struct ftdi_usb *ftdi)
 	ret = ftdi_mpsse_set_output(&cmd, 0x00fb, 0x00fd);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_submit(ftdi, &cmd);
 	if (ret < 0)
 		return ret;
@@ -144,6 +143,7 @@ static int ftdi_i2c_start(struct ftdi_usb *ftdi)
 	ret = ftdi_mpsse_set_output(&cmd, 0x40fb, 0x00fc);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_submit(ftdi, &cmd);
 	if (ret < 0)
 		return ret;
@@ -161,6 +161,7 @@ static int ftdi_i2c_stop(struct ftdi_usb *ftdi)
 	ret = ftdi_mpsse_set_output(&cmd, 0x00fb, 0x00fc);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_submit(ftdi, &cmd);
 	if (ret < 0)
 		return ret;
@@ -171,6 +172,7 @@ static int ftdi_i2c_stop(struct ftdi_usb *ftdi)
 	ret = ftdi_mpsse_set_output(&cmd, 0x00fb, 0x00fd);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_submit(ftdi, &cmd);
 	if (ret < 0)
 		return ret;
@@ -181,6 +183,7 @@ static int ftdi_i2c_stop(struct ftdi_usb *ftdi)
 	ret = ftdi_mpsse_set_output(&cmd, 0x40fb, 0xffff);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_submit(ftdi, &cmd);
 	if (ret < 0)
 		return ret;
@@ -218,6 +221,7 @@ static int ftdi_i2c_write_byte(struct ftdi_usb *ftdi, u8 byte)
 	ret = ftdi_mpsse_receive(ftdi, &byte, sizeof(byte));
 	if (ret < 0)
 		return ret;
+
 	if ((byte & 0x1) != 0)
 		return -EIO;
 
@@ -254,6 +258,7 @@ static int ftdi_i2c_read_bytes(struct ftdi_usb *ftdi, u8 *data, size_t size)
 	ret = ftdi_mpsse_read_bytes(&cmd, 1);
 	if (ret < 0)
 		return ret;
+
 	for (i = 1; i < size; ++i) {
 		ret = ftdi_mpsse_write_bits(&cmd, 0x00, 1);
 		if (ret < 0)
@@ -267,9 +272,11 @@ static int ftdi_i2c_read_bytes(struct ftdi_usb *ftdi, u8 *data, size_t size)
 		if (ret < 0)
 			return ret;
 	}
+
 	ret = ftdi_mpsse_write_bits(&cmd, 0xff, 1);
 	if (ret < 0)
 		return ret;
+
 	ret = ftdi_mpsse_set_output(&cmd, 0x00fb, 0x00fe);
 	if (ret < 0)
 		return ret;
